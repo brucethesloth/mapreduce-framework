@@ -15,7 +15,7 @@
  * @param delim character to be split on
  * @return a vector containing all the strings
  */
-std::vector<std::string> split(std::string input, char delim) {
+inline std::vector<std::string> split(std::string input, char delim) {
     std::vector<std::string> result;
     std::stringstream input_stream(input);
 
@@ -69,8 +69,9 @@ inline bool read_mr_spec_from_config_file(
 
     // read
     while (std::getline(config_file, property)) {
-        sscanf(property.c_str(), "%s=%s", key, value);
+        sscanf(property.c_str(), "%[_,a-z,A-Z]=%s", key, value);
         config_map[key] = value;
+//        std::cout << "key: " << key << " value: " << value << std::endl;
     }
     config_file.close();
 
@@ -99,6 +100,11 @@ inline bool validate_mr_spec(const MapReduceSpec &mr_spec) {
     bool output_dir_pass = !mr_spec.output_dir.empty();
     bool user_id_pass = !mr_spec.user_id.empty();
 
+//    std::cout << "worker_pass: "  << worker_pass << std::endl
+//            << "output_pass: "  << output_pass << std::endl
+//            << "output_dir_pass: "  << output_dir_pass << std::endl
+//            << "user_id_pass: "  << user_id_pass << std::endl;
+
     bool input_files_pass = mr_spec.input_files.size() > 0;
     if (input_files_pass) {
         for (std::string file_name: mr_spec.input_files) {
@@ -107,15 +113,17 @@ inline bool validate_mr_spec(const MapReduceSpec &mr_spec) {
             input_file.close();
         }
     }
+//    std::cout << "input_files_pass: " << input_files_pass << std::endl;
 
     // validate worker address port
     bool worker_addr_pass = mr_spec.worker_addrs.size() > 0;
     if (worker_addr_pass) {
-        char host[10];
-        int port;
+        char host[50], port[50];
         for (std::string worker_addr : mr_spec.worker_addrs) {
-            sscanf(worker_addr.c_str(), "%s:%d", host, &port);
-            worker_addr_pass &= (strncmp(host, "localhost", 9) == 0 && (0 < port && port <= 65535));
+            sscanf(worker_addr.c_str(), "%[A-Z,a-z]:%[0-9]", host, port);
+            worker_addr_pass &= (strncmp(host, "localhost", 9) == 0);
+            worker_addr_pass &= (0 < atoi(port) && atoi(port) <= 65535);
+//            std::cout << "Host: " << host << " Port: " << port << std::endl;
         }
     }
 
