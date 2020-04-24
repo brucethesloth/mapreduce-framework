@@ -1,3 +1,41 @@
 syntax = "proto3";
 
 package masterworker;
+
+service WorkerService {
+    rpc DoMap(ShardInfo) returns (MapReply) {}
+    rpc DoReduce(MapReply) returns (ReduceReply) {}
+}
+
+message ShardSegment {
+    string filename = 1;
+    int32 begin = 2;
+    int32 end = 3;
+}
+
+// master sends shard info to workers
+message ShardInfo {
+    int32 id = 1;
+    repeated ShardSegment segments = 2;
+}
+
+message MapReply {
+    string worker_addr = 1;
+    string filename = 2;
+}
+
+message ReduceReply {
+    string worker_addr = 1;
+    string filename = 2;
+}
+
+// worker writes key value list to interim file after mapping is done
+message InterimFile {
+    string filename = 1;
+    string worker_addr = 2; // needed by master's worker pool management
+}
+
+message OutputFile {
+    string filename = 1;
+    string worker_addr = 2;
+}
