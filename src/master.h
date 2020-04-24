@@ -25,6 +25,7 @@ using grpc::ClientAsyncResponseReader;
 using masterworker::ShardSegment;
 using masterworker::ShardInfo;
 using masterworker::WorkerService;
+using masterworker::MapRequest;
 using masterworker::MapReply;
 
 const int TIMEOUT_MAX = 32;
@@ -33,7 +34,7 @@ const int BACK_OFF_FACTOR = 2;
 
 struct MapTask {
     int timeout;
-    ShardInfo shard;
+    MapRequest request;
 };
 
 struct Worker {
@@ -108,7 +109,7 @@ private:
     struct AsyncMapCall {
         int timeout;
         std::string worker_addr;
-        ShardInfo protobuf_shard;
+        MapRequest request;
         MapReply reply;
         ClientContext context;
         Status status;
@@ -131,9 +132,13 @@ Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file
     for (FileShard file_shard : file_shards) {
 
         ShardInfo shard = to_protobuf_shard(&file_shard);
+        MapRequest *request = new MapRequest;
+        request->set_user_id(mr_spec.user_id);
+        request->set_allocated_shard(&shard);
+
         MapTask *task = new MapTask;
         task->timeout = INITIAL_TIME_OUT;
-        task->shard = shard;
+        task->request = *request;
 
         map_task_queue.push(task);
     }
@@ -161,6 +166,8 @@ bool Master::run() {
 void Master::MapPhase() {
 
     while (interim_file_queue.size() < M) {
+        std::cout << "Interim File Size: " << interim_file_queue.size() << " M: " << M << std::endl;
+
         // 1. Get a Task
         std::unique_lock<std::mutex> task_guard( map_task_lock );
         while( map_task_queue.size() == 0 ) {
@@ -170,7 +177,7 @@ void Master::MapPhase() {
         map_task_queue.pop();
         map_cv.notify_one();
         task_guard.unlock();
-        std::cout << "Got Task for [shard " << task->shard.id() << "]" << std::endl;
+        std::cout << "Got Task for [shard " << task->request.shard().id() << "]" << std::endl;
 
         // 2. Get a worker
         std::unique_lock<std::mutex> worker_guard( worker_lock );
@@ -200,10 +207,10 @@ void Master::CallMap(std::string worker_addr, MapTask *task) {
     AsyncMapCall *map_call = new AsyncMapCall;
     map_call->timeout = task->timeout;
     map_call->worker_addr = worker_addr;
-    map_call->protobuf_shard = task->shard;
+    map_call->request = task->request;
     std::unique_ptr <WorkerService::Stub> &stub_ = worker_stubs.at(worker_addr);
     map_call->response_reader =
-            stub_->PrepareAsyncDoMap(&map_call->context, task->shard, &cq);
+            stub_->PrepareAsyncDoMap(&map_call->context, task->request, &cq);
 
     // set deadline
     std::chrono::system_clock::time_point deadline =
@@ -239,8 +246,8 @@ void Master::AsyncCompleteMap() {
 
             MapTask *new_task = new MapTask;
             new_task->timeout = new_timeout;
-            new_task->shard = call->protobuf_shard;
-            std::cout << "Retrying for request shard [" << new_task->shard.id() << "] " << std::endl;
+            new_task->request = call->request;
+            std::cout << "Retrying for request shard [" << new_task->request.shard().id() << "] " << std::endl;
 
             // queue the new attempt -- wait until the task queue is empty
             std::unique_lock <std::mutex> map_task_guard(map_task_lock);
@@ -259,16 +266,18 @@ void Master::AsyncCompleteMap() {
             std::unique_lock <std::mutex> interim_files_guard(interim_file_lock);
             interim_file_queue.push(call->reply.filename());
             interim_files_guard.unlock();
+
+            std::cout << "Pushed Intrim Files back!" << std::endl;
         }
 
+        std::cout << "Pushing Worker Back!" << std::endl;
         // put worker back - wait until all workers are gone
         std::unique_lock <std::mutex> worker_queue_guard(worker_lock);
-        while (worker_queue.size() > 0) {
-            worker_cv.wait(worker_queue_guard, [this] { return worker_queue.size() == 0; });
-        }
         worker_queue.push(call->worker_addr);
         worker_cv.notify_one();
         worker_queue_guard.unlock();
+
+        std::cout << "Pushed Worker Back!" << std::endl;
 
         delete call;
     }

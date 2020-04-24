@@ -100,82 +100,6 @@ inline size_t get_total_input_size(const MapReduceSpec &mr_spec) {
     return total_size;
 }
 
-
-/* CS6210_TASK: Create fileshards from the list of input files, map_kilobytes etc. using mr_spec you populated  */
-/**
- * Citation: https://stackoverflow.com/questions/25475384/when-and-why-do-i-need-to-use-cin-ignore-in-c
- * @param mr_spec
- * @param file_shards
- * @return
- */
-
-//inline bool shard_files(const MapReduceSpec &mr_spec, std::vector <FileShard> &file_shards) {
-//    int shard_capacity = mr_spec.map_size * KB;
-//    int shard_id = 0;
-//    int additional_shard, remain;
-//    int start, end;
-//    int i;
-//    int file_size;
-//
-//    FileShard *current_file_shard = nullptr;
-//    FileSegment *segment = nullptr;
-//    std::vector<FileSegment *> segments;
-//    int space_on_shard = 0;
-//    for (std::string input_file_name : mr_spec.input_files) {
-//        file_size = get_input_file_size(input_file_name.c_str());
-//        if (space_on_shard > 0) {
-//            if (space_on_shard <= file_size) {
-//                segment = create_file_segment(input_file_name, 0, space_on_shard);
-//                segments.push_back(segment);
-//                file_size -= space_on_shard;
-//                append_segments(current_file_shard, segments);
-//
-//                file_shards.push_back(*current_file_shard);
-//                segments.clear();
-//                space_on_shard = 0;
-//            } else {
-//                segment = create_file_segment(input_file_name, 0, file_size);
-//                segments.push_back(segment);
-//                space_on_shard -= file_size;
-//            }
-//        }
-//        if (space_on_shard == 0) {
-//            additional_shard = file_size / shard_capacity;
-//            remain = file_size % shard_capacity;
-//            start = 0;
-//            end = std::min(start + shard_capacity, file_size);
-//            for (i = 0; i < additional_shard; i++) {
-//                current_file_shard = create_file_shard(++shard_id);
-//                segment = create_file_segment(input_file_name, start, end);
-//                segments.push_back(segment);
-//                append_segments(current_file_shard, segments);
-//                file_shards.push_back(*current_file_shard);
-//                segments.clear();
-//                start = (i + 1) * shard_capacity;
-//                end = start + shard_capacity;
-//            }
-//            if (remain > 0) {
-//                space_on_shard = shard_capacity - remain;
-//                current_file_shard = create_file_shard(++shard_id);
-//                segment = create_file_segment(input_file_name, start, end);
-//                segments.push_back(segment);
-//            }
-//        }
-//    }
-//    if (space_on_shard > 0) {
-//        append_segments(current_file_shard, segments);
-//        file_shards.push_back(*current_file_shard);
-//    }
-//
-//    for (FileShard s : file_shards) {
-//        print_shard(&s);
-//    }
-//
-//
-//    return true;
-//
-//}
-
 /* CS6210_TASK: Create fileshards from the list of input files, map_kilobytes etc. using mr_spec you populated  */
 /**
  * Citation: https://stackoverflow.com/questions/25475384/when-and-why-do-i-need-to-use-cin-ignore-in-c
@@ -272,6 +196,10 @@ inline bool shard_files(const MapReduceSpec &mr_spec, std::vector <FileShard> &f
         file_shards.push_back(*current_file_shard);
         segments.clear();
     }
+//
+//    for ( FileShard shard : file_shards) {
+//        print_shard( &shard );
+//    }
 
     return true;
 }
