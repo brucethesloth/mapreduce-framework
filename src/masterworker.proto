@@ -5,7 +5,7 @@ package masterworker;
 service WorkerService {
     rpc DoMap (MapRequest) returns (MapReply) {
     }
-    rpc DoReduce (MapReply) returns (ReduceReply) {
+    rpc DoReduce (ReduceRequest) returns (ReduceReply) {
     }
 }
 
@@ -32,18 +32,14 @@ message MapReply {
     repeated string file_names = 1;
 }
 
+message ReduceRequest {
+    string user_id = 1;
+    int32 num_outputs = 2;
+    string output_dir = 3;
+    repeated string file_names = 4; // interim file name
+}
+
 message ReduceReply {
     string worker_addr = 1;
     string filename = 2;
-}
-
-// worker writes key value list to interim file after mapping is done
-message InterimFile {
-    string filename = 1;
-    string worker_addr = 2; // needed by master's worker pool management
-}
-
-message OutputFile {
-    string filename = 1;
-    string worker_addr = 2;
 }

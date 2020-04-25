@@ -26,6 +26,8 @@ using masterworker::ShardInfo;
 using masterworker::WorkerService;
 using masterworker::MapRequest;
 using masterworker::MapReply;
+using masterworker::ReduceRequest;
+using masterworker::ReduceReply;
 
 const int TIMEOUT_MAX = 64;
 const int INITIAL_TIME_OUT = 1;
@@ -42,6 +44,12 @@ struct MapTask {
     int shard_id;
     TaskStatus status;
     MapRequest request;
+};
+
+struct ReduceTask {
+    int reduce_id;
+    TaskStatus status;
+    ReduceRequest request;
 };
 
 struct WorkerInfo {
@@ -74,6 +82,22 @@ inline void print_map_tracker(std::vector<MapTask *> tasks) {
     }
 }
 
+inline void print_reduce_tracker(std::vector<ReduceTask *> tasks) {
+    for (ReduceTask* task : tasks) {
+        std::string status = task->status == PENDING ? "P" : task->status == RUNNING ? "R" : "C";
+        std::cout << "Task:"
+                  << " part: " << task->reduce_id
+                  << " status: " << status
+                  << std::endl;
+
+        for (std::string file_name : task->request.file_names()) {
+            std::cout << file_name << ",";
+        }
+
+        std::cout << std::endl;
+    }
+}
+
 
 /* CS6210_TASK: Handle all the bookkeeping that Master is supposed to do.
 	This is probably the biggest task for this project, will test your understanding of map reduce */
@@ -93,8 +117,9 @@ private:
     MapReduceSpec mr_spec;
     std::vector <FileShard> file_shards;
 
-    // map task management
+    // task management
     std::vector<MapTask *> map_task_tracker;
+    std::vector<ReduceTask *> reduce_task_tracker;
 
     // worker management
     std::map <std::string, std::unique_ptr<WorkerService::Stub>> worker_stubs;
@@ -116,14 +141,19 @@ private:
 
     void WorkerSetup();
 
-    // Map Stuff
+    // Map Functions
     void PrepareMapPhase();
     void MapPhase();
     void CallMap(MapTask *task, WorkerInfo *worker_info);
     void AsyncCompleteMap();
     bool shouldDoMapWork();
 
-    // Reduce Stuff
+    // Reduce Functions
+    void PrepareReducePhase();
+//    void ReducePhase();
+//    void CallReduce(ReduceTask *, WorkerInfo *);
+//    void AsyncCompleteReduce();
+    bool shouldDoReduceWork();
 };
 
 /* CS6210_TASK: This is all the information your master will get from the framework.
@@ -134,6 +164,7 @@ Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file
 
     WorkerSetup();
     PrepareMapPhase();
+    PrepareReducePhase();
 }
 
 /* CS6210_TASK: Here you go. once this function is called you will complete whole map reduce task and return true if succeeded */
@@ -244,7 +275,6 @@ void Master::MapPhase() {
     std::cout << "Map Phase Complete!" << std::endl;
 }
 
-
 void Master::CallMap(MapTask *task, WorkerInfo *worker_info) {
 //    std::cout << "Shard [" << task->shard_id
 //              << "] is being handled by Worker [" << worker_info->addr
@@ -291,6 +321,10 @@ void Master::AsyncCompleteMap() {
                 } else {
                     std::cout << "shard [" << call->request.shard().shard_id() << "] completed!" << std::endl;
                     t->status = COMPLETED;
+                    for (int i = 0; i < call->reply.file_names().size(); i++) {
+                        std::string interim_filename = call->reply.file_names(i);
+                        reduce_task_tracker.at(i)->request.add_file_names(interim_filename);
+                    }
                 }
 
                 break;
@@ -329,4 +363,34 @@ bool Master::shouldDoMapWork() {
     }
 
     return false;
+}
+
+bool Master::shouldDoReduceWork() {
+    for (ReduceTask *task: reduce_task_tracker) {
+        if (task->status != COMPLETED) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void Master::PrepareReducePhase() {
+    R = mr_spec.num_outputs;
+
+    // create reduce tasks
+    for (int i = 0; i < mr_spec.num_outputs; i++) {
+        ReduceTask *task = new ReduceTask;
+
+        ReduceRequest *request = new ReduceRequest;
+        request->set_user_id(mr_spec.user_id);
+        request->set_num_outputs(mr_spec.num_outputs);
+        request->set_output_dir(mr_spec.output_dir);
+
+        task->status = PENDING;
+        task->reduce_id = i;
+        task->request = *request;
+
+        reduce_task_tracker.emplace_back(task);
+    }
 }
