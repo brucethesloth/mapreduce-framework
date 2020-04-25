@@ -3,25 +3,29 @@ syntax = "proto3";
 package masterworker;
 
 service WorkerService {
-    rpc DoMap(MapRequest) returns (MapReply) {}
-    rpc DoReduce(MapReply) returns (ReduceReply) {}
+    rpc DoMap (MapRequest) returns (MapReply) {
+    }
+    rpc DoReduce (MapReply) returns (ReduceReply) {
+    }
 }
 
 message ShardSegment {
-    string filename = 1;
+    string file_name = 1;
     int32 begin = 2;
     int32 end = 3;
-}
-
-message MapRequest {
-    string user_id = 1;
-    ShardInfo shard = 2;
 }
 
 // master sends shard info to workers
 message ShardInfo {
     int32 id = 1;
     repeated ShardSegment segments = 2;
+}
+
+message MapRequest {
+    string user_id = 1;
+    int32 num_outputs = 2;
+    string output_dir = 3;
+    ShardInfo shard = 4;
 }
 
 message MapReply {

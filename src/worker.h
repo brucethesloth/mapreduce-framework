@@ -59,7 +59,7 @@ Status Worker::DoMap(ServerContext *context, const MapRequest *request, MapReply
     // debug
     std::cout << "Worker got fileshard info!\n";
     for (ShardSegment segment : shard.segments()) {
-        std::string file_name = segment.filename();
+        std::string file_name = segment.file_name();
         int begin = segment.begin();
         int end = segment.end();
 
