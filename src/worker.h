@@ -18,6 +18,7 @@ using masterworker::ShardInfo;
 using masterworker::ShardSegment;
 using masterworker::MapRequest;
 using masterworker::MapReply;
+using masterworker::ReduceRequest;
 using masterworker::ReduceReply;
 using masterworker::WorkerService;
 
@@ -40,7 +41,7 @@ class Worker : public WorkerService::Service {
 		std::string worker_addr;
 
 		Status DoMap(ServerContext* context, const MapRequest* request, MapReply* reply);
-        Status DoReduce(ServerContext* context, const MapReply* request, ReduceReply* reply);
+        Status DoReduce(ServerContext* context, const ReduceRequest* request, ReduceReply* reply);
 };
 
 
@@ -72,20 +73,48 @@ Status Worker::DoMap(ServerContext *context, const MapRequest *request, MapReply
         }
     }
 
-//    mapper->impl_->finalize();
-
     // reply
     for (std::string interim_file_name : mapper->impl_->get_output_files()) {
         reply->add_file_names(interim_file_name);
     }
 
     // write to file
-    std::cout << "work for Shard [" << request->shard().shard_id() << "] is completed by worker [" << worker_addr << "]" << std::endl;
+    std::cout << "work for shard [" << request->shard().shard_id() << "] is completed by worker [" << worker_addr << "]" << std::endl;
     return Status::OK;
 }
 
-Status Worker::DoReduce(ServerContext *context, const MapReply *request, ReduceReply *reply) {
-    // todo: implement me!
+Status Worker::DoReduce(ServerContext *context, const ReduceRequest *request, ReduceReply *reply) {
+    auto reducer = get_reducer_from_task_factory(request->user_id());
+    int reduce_id = request->reduce_id();
+
+    std::cout << "Preparing to handle reduce [" << reduce_id << "] Num Outputs: " << request->num_outputs() << std::endl;
+    reducer->impl_ = new BaseReducerInternal();
+    reducer->impl_->initialize( request->output_dir(), request->num_outputs() );
+    std::cout << "Internal Reducer Initialized" << std::endl;
+
+    std::string k, v;
+    std::map<std::string, std::vector<std::string>> dictionary;
+    for (std::string interim_file : request->file_names()) {
+        std::ifstream interim(interim_file.c_str(), std::ios::binary);
+        while (interim >> k >> v) {
+            dictionary[k].push_back(v);
+        }
+    }
+
+    // apply user reduce
+    for (auto entry = dictionary.begin(); entry != dictionary.end(); entry++) {
+        reducer->reduce(entry->first, entry->second);
+    }
+
+    std::cout << "Reduce applied by worker [" << worker_addr << "]" << std::endl;
+
+    // reply
+    for (std::string final_file_name : reducer->impl_->get_output_files()) {
+        reply->add_file_names( final_file_name );
+    }
+
+    std::cout << "work for reduce [" << request->reduce_id() << "] is completed by worker [" << worker_addr << "]" << std::endl;
+    return Status::OK;
 }
 
 /* CS6210_TASK: Here you go. once this function is called your woker's job is to keep looking for new tasks

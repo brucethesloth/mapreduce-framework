@@ -15,7 +15,6 @@ message ShardSegment {
     int32 end = 3;
 }
 
-// master sends shard info to workers
 message ShardInfo {
     int32 shard_id = 1;
     repeated ShardSegment segments = 2;
@@ -33,13 +32,13 @@ message MapReply {
 }
 
 message ReduceRequest {
-    string user_id = 1;
-    int32 num_outputs = 2;
-    string output_dir = 3;
-    repeated string file_names = 4; // interim file name
+    int32 reduce_id = 1;
+    string user_id = 2;
+    int32 num_outputs = 4;
+    string output_dir = 5;
+    repeated string file_names = 6; // interim file name
 }
 
 message ReduceReply {
-    string worker_addr = 1;
-    string filename = 2;
+    repeated string file_names = 1; // final file names
 }

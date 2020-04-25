@@ -29,7 +29,7 @@ using masterworker::MapReply;
 using masterworker::ReduceRequest;
 using masterworker::ReduceReply;
 
-const int TIMEOUT_MAX = 64;
+const int TIMEOUT_MAX = 4;
 const int INITIAL_TIME_OUT = 1;
 const int BACK_OFF_FACTOR = 2;
 
@@ -83,18 +83,23 @@ inline void print_map_tracker(std::vector<MapTask *> tasks) {
 }
 
 inline void print_reduce_tracker(std::vector<ReduceTask *> tasks) {
-    for (ReduceTask* task : tasks) {
+    for (ReduceTask *task : tasks) {
         std::string status = task->status == PENDING ? "P" : task->status == RUNNING ? "R" : "C";
         std::cout << "Task:"
                   << " part: " << task->reduce_id
                   << " status: " << status
                   << std::endl;
 
-        for (std::string file_name : task->request.file_names()) {
-            std::cout << file_name << ",";
-        }
+    }
+}
 
-        std::cout << std::endl;
+inline void print_worker_tracker( std::vector<WorkerInfo *> worker_tracker) {
+    for (WorkerInfo *info : worker_tracker) {
+        std::string status = info->status == BUSY ? "Busy" : "Available";
+        std::cout << "Worker: " << info->addr
+                    << " status: " << status
+                    << " timeout: " << info->timeout
+                    << std::endl;
     }
 }
 
@@ -112,12 +117,10 @@ public:
 
 private:
     /* NOW you can add below, data members and member functions as per the need of your implementation*/
-    int M; // number of map jobs
-    int R; // number of reduce jobs
     MapReduceSpec mr_spec;
     std::vector <FileShard> file_shards;
 
-    // task management
+    // tasks management
     std::vector<MapTask *> map_task_tracker;
     std::vector<ReduceTask *> reduce_task_tracker;
 
@@ -128,7 +131,6 @@ private:
     // GRPC Stuff
     CompletionQueue cq;
 
-    // Map Stuff
     struct AsyncMapCall {
         int timeout;
         std::string worker_addr;
@@ -139,21 +141,42 @@ private:
         std::unique_ptr <ClientAsyncResponseReader<MapReply>> response_reader;
     };
 
+    struct AsyncReduceCall {
+        int timeout;
+        std::string worker_addr;
+        ReduceRequest request;
+        ReduceReply reply;
+        ClientContext context;
+        Status status;
+        std::unique_ptr <ClientAsyncResponseReader<ReduceReply>> response_reader;
+    };
+
+    // Worker Functions
     void WorkerSetup();
+    void SetWorkerAvailable(std::string, int);
+    WorkerInfo *GetAvailableWorker();
 
     // Map Functions
     void PrepareMapPhase();
+
     void MapPhase();
+
     void CallMap(MapTask *task, WorkerInfo *worker_info);
+
     void AsyncCompleteMap();
-    bool shouldDoMapWork();
+
+    bool ShouldDoMapWork();
 
     // Reduce Functions
     void PrepareReducePhase();
-//    void ReducePhase();
-//    void CallReduce(ReduceTask *, WorkerInfo *);
-//    void AsyncCompleteReduce();
-    bool shouldDoReduceWork();
+
+    void ReducePhase();
+
+    void CallReduce(ReduceTask *, WorkerInfo *);
+
+    void AsyncCompleteReduce();
+
+    bool ShouldDoReduceWork();
 };
 
 /* CS6210_TASK: This is all the information your master will get from the framework.
@@ -170,6 +193,8 @@ Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file
 /* CS6210_TASK: Here you go. once this function is called you will complete whole map reduce task and return true if succeeded */
 bool Master::run() {
     MapPhase();
+    ReducePhase();
+    std::cout << "Map Reduce Done..." <<  std::endl;
 
     return true;
 }
@@ -181,7 +206,6 @@ void Master::WorkerSetup() {
                 grpc::CreateChannel(worker_addr, grpc::InsecureChannelCredentials());
         std::unique_ptr <WorkerService::Stub> stub(WorkerService::NewStub(channel));
 
-//        std::cout << "Initiating worker resource for [" << worker_addr << "]" << std::endl;
         worker_stubs.insert(std::pair < std::string,
                             std::unique_ptr < WorkerService::Stub > > (worker_addr, std::move(stub)));
 
@@ -193,13 +217,34 @@ void Master::WorkerSetup() {
 
         worker_tracker.emplace_back(worker_info);
 
-//        std::cout << "Worker Resource initiated for [" << worker_addr << "]" << std::endl;
     }
 }
 
-void Master::PrepareMapPhase() {
-    M = file_shards.size();
+void Master::SetWorkerAvailable(std::string worker_addr, int new_timeout) {
+    for (WorkerInfo *worker_info : worker_tracker) {
+        if (std::strcmp(worker_info->addr.c_str(), worker_addr.c_str()) == 0) {
+            worker_info->timeout = new_timeout;
+            worker_info->status = AVAILABLE;
+            break;
+        }
+    }
+}
 
+WorkerInfo *Master::GetAvailableWorker() {
+    WorkerInfo *available_worker = nullptr;
+
+    for (WorkerInfo *it : worker_tracker) {
+        if (it->status == AVAILABLE) {
+            available_worker = it;
+        }
+
+        break;
+    }
+
+    return available_worker;
+}
+
+void Master::PrepareMapPhase() {
     // create map tasks
     for (FileShard file_shard : file_shards) {
 
@@ -224,15 +269,15 @@ void Master::PrepareMapPhase() {
 void Master::MapPhase() {
     std::cout << "Map Phase Started!" << std::endl;
 
-    // 1. Spawn a listener routine to reap the results of the future map calls
+    // 1. Spawn a map listener routine to reap the results of the future map calls
     std::thread map_listener(&Master::AsyncCompleteMap, this);
 
     // 2. Do Map work
-    while (shouldDoMapWork()) {
+    while (ShouldDoMapWork()) {
 
         MapTask *task = nullptr;
 
-        //2.1 Pick a Task
+        // 2.1 Pick a task
         for (MapTask *it: map_task_tracker) {
             if (it->status == PENDING) {
                 task = it;
@@ -242,19 +287,9 @@ void Master::MapPhase() {
 
         if (task != nullptr) {
             // 2.2 Pick a worker
-            std::cout << "Work needs to be done for shard [" << task->shard_id << "]." << std::endl;
-
-            WorkerInfo *worker = nullptr;
-
-            for (WorkerInfo *it: worker_tracker) {
-                if (it->status == AVAILABLE) {
-                    worker = it;
-                    break;
-                }
-            }
+            WorkerInfo *worker = GetAvailableWorker();
 
             if (worker != nullptr) {
-//                std::cout << "Got Worker from [" << worker->addr << "]" << std::endl;
                 task->status = RUNNING;
                 worker->status = BUSY;
 
@@ -264,8 +299,6 @@ void Master::MapPhase() {
 
                 std::cout << "Dispatched job for shard [" << task->shard_id
                           << "] to worker [" << worker->addr << "]" << std::endl;
-            } else {
-                std::cout << "No worker is available at the moment for shard [" << task->shard_id << "]" << std::endl;
             }
         }
     }
@@ -276,10 +309,6 @@ void Master::MapPhase() {
 }
 
 void Master::CallMap(MapTask *task, WorkerInfo *worker_info) {
-//    std::cout << "Shard [" << task->shard_id
-//              << "] is being handled by Worker [" << worker_info->addr
-//              << "]." << std::endl;
-
     // fill in call data: timeout, worker_addr, protobuf_shard are extra stuff
     AsyncMapCall *map_call = new AsyncMapCall;
     map_call->timeout = worker_info->timeout;
@@ -301,60 +330,44 @@ void Master::CallMap(MapTask *task, WorkerInfo *worker_info) {
 }
 
 void Master::AsyncCompleteMap() {
-    std::cout << "Listener Thread Started!" << std::endl;
+    std::cout << "Map Listener Thread Started!" << std::endl;
     void *got_tag;
     bool ok = false;
 
-    while (shouldDoMapWork()) {
+    while (ShouldDoMapWork()) {
         cq.Next(&got_tag, &ok);
         AsyncMapCall *call = static_cast<AsyncMapCall *>(got_tag);
 
         GPR_ASSERT(ok);
 
-        // updating task status
-//        std::cout << "Updating Status for shard [" << call->request.shard().shard_id() << "]" << std::endl;
-        for (MapTask *t : map_task_tracker) {
-            if (t->shard_id == call->request.shard().shard_id()) {
-                if (!call->status.ok()) {
-                    std::cout << "shard [" << call->request.shard().shard_id() << "] failed!" << std::endl;
-                    t->status = PENDING;
-                } else {
-                    std::cout << "shard [" << call->request.shard().shard_id() << "] completed!" << std::endl;
-                    t->status = COMPLETED;
-                    for (int i = 0; i < call->reply.file_names().size(); i++) {
-                        std::string interim_filename = call->reply.file_names(i);
-                        reduce_task_tracker.at(i)->request.add_file_names(interim_filename);
-                    }
-                }
-
-                break;
-            }
-        }
-
-        // updating worker status
+        // updating map task status
+        int shard_id = call->request.shard().shard_id();
+        TaskStatus task_status;
         int new_timeout;
-//        std::cout << "Releasing Worker [" << call->worker_addr << "] Back!" << std::endl;
-        for (WorkerInfo *worker_info : worker_tracker) {
-            if (std::strcmp(worker_info->addr.c_str(), call->worker_addr.c_str()) == 0) {
 
-                if (!call->status.ok()) {
-                    new_timeout = call->timeout < TIMEOUT_MAX ? BACK_OFF_FACTOR * call->timeout : call->timeout;
-                } else {
-                    new_timeout = call->timeout > INITIAL_TIME_OUT ? (call->timeout / BACK_OFF_FACTOR) : call->timeout;
-                }
-
-                worker_info->timeout = new_timeout;
-                worker_info->status = AVAILABLE;
-                break;
+        if (!call->status.ok()) {
+            std::cout << "map [" << shard_id << "] failed!" << std::endl;
+            task_status = PENDING;
+            new_timeout = call->timeout < TIMEOUT_MAX ? BACK_OFF_FACTOR * call->timeout : call->timeout;
+        } else {
+            std::cout << "map [" << shard_id << "] completed!" << std::endl;
+            task_status = COMPLETED;
+            for (int i = 0; i < call->reply.file_names().size(); i++) {
+                std::string interim_filename = call->reply.file_names(i);
+                reduce_task_tracker.at(i)->request.add_file_names(interim_filename);
             }
+            new_timeout = call->timeout > INITIAL_TIME_OUT ? (call->timeout / BACK_OFF_FACTOR) : call->timeout;
         }
+
+        map_task_tracker.at(shard_id - 1)->status = task_status;
+        SetWorkerAvailable(call->worker_addr, new_timeout);
         std::cout << "worker [" << call->worker_addr << "] released!" << std::endl;
 
         delete call;
     }
 }
 
-bool Master::shouldDoMapWork() {
+bool Master::ShouldDoMapWork() {
     for (MapTask *task : map_task_tracker) {
 
         if (task->status != COMPLETED) {
@@ -365,24 +378,54 @@ bool Master::shouldDoMapWork() {
     return false;
 }
 
-bool Master::shouldDoReduceWork() {
-    for (ReduceTask *task: reduce_task_tracker) {
-        if (task->status != COMPLETED) {
-            return true;
+void Master::ReducePhase() {
+    std::cout << "Reduce Phase Started!" << std::endl;
+
+    // 1. Spawn a reduce listener routine to reap the results of the future reduce calls
+    std::thread reduce_listener(&Master::AsyncCompleteReduce, this);
+
+    // 2. Do Reduce work
+    while (ShouldDoReduceWork()) {
+        ReduceTask *task = nullptr;
+
+        // 2.1 Pick a task
+        for (ReduceTask *it: reduce_task_tracker) {
+            if (it->status == PENDING) {
+                task = it;
+                break;
+            }
+        }
+
+        if (task != nullptr) {
+            // 2.2 Pick a worker
+            WorkerInfo *worker = GetAvailableWorker();
+
+            if (worker != nullptr) {
+                task->status = RUNNING;
+                worker->status = BUSY;
+
+                // 2.3 Call Reduce
+                std::thread async_callReduce(&Master::CallReduce, this, task, worker);
+                async_callReduce.detach();
+
+                std::cout << "Dispatched job for reduce [" << task->reduce_id
+                          << "] to worker [" << worker->addr << "]" << std::endl;
+            }
         }
     }
 
-    return false;
+    reduce_listener.join();
+
+    std::cout << "Reduce Phase Complete!" << std::endl;
 }
 
 void Master::PrepareReducePhase() {
-    R = mr_spec.num_outputs;
-
     // create reduce tasks
     for (int i = 0; i < mr_spec.num_outputs; i++) {
         ReduceTask *task = new ReduceTask;
 
         ReduceRequest *request = new ReduceRequest;
+        request->set_reduce_id(i);
         request->set_user_id(mr_spec.user_id);
         request->set_num_outputs(mr_spec.num_outputs);
         request->set_output_dir(mr_spec.output_dir);
@@ -393,4 +436,68 @@ void Master::PrepareReducePhase() {
 
         reduce_task_tracker.emplace_back(task);
     }
+}
+
+void Master::CallReduce(ReduceTask *task, WorkerInfo *worker_info) {
+    AsyncReduceCall *reduce_call = new AsyncReduceCall;
+    reduce_call->timeout = worker_info->timeout;
+    reduce_call->worker_addr = worker_info->addr;
+    reduce_call->request = task->request;
+    std::unique_ptr <WorkerService::Stub> &stub_ = worker_stubs.at(worker_info->addr);
+    reduce_call->response_reader =
+            stub_->PrepareAsyncDoReduce(&reduce_call->context, task->request, &cq);
+
+    std::chrono::system_clock::time_point deadline =
+            std::chrono::system_clock::now() + std::chrono::seconds(worker_info->timeout);
+
+    reduce_call->context.set_deadline(deadline);
+
+    // make the call!
+    reduce_call->response_reader->StartCall();
+    reduce_call->response_reader->Finish(&reduce_call->reply, &reduce_call->status, (void *) reduce_call);
+
+}
+
+void Master::AsyncCompleteReduce() {
+    std::cout << "Reduce Listener Thread Started!" << std::endl;
+    void *got_tag;
+    bool ok = false;
+
+    while (ShouldDoReduceWork()) {
+        cq.Next(&got_tag, &ok);
+        AsyncReduceCall *call = static_cast<AsyncReduceCall *>(got_tag);
+
+        GPR_ASSERT(ok);
+
+        // updating reduce task status
+        int reduce_id = call->request.reduce_id();
+        TaskStatus task_status;
+        int new_timeout;
+
+        if (!call->status.ok()) {
+            std::cout << "reduce [" << reduce_id << "] failed!" << std::endl;
+            task_status = PENDING;
+            new_timeout = call->timeout < TIMEOUT_MAX ? BACK_OFF_FACTOR * call->timeout : call->timeout;
+        } else {
+            std::cout << "reduce [" << reduce_id << "] completed!" << std::endl;
+            task_status = COMPLETED;
+            new_timeout = call->timeout > INITIAL_TIME_OUT ? (call->timeout / BACK_OFF_FACTOR) : call->timeout;
+        }
+
+        reduce_task_tracker.at(reduce_id)->status = task_status;
+        SetWorkerAvailable(call->worker_addr, new_timeout);
+        std::cout << "reduce worker [" << call->worker_addr << "] released!" << std::endl;
+
+        delete call;
+    }
+}
+
+bool Master::ShouldDoReduceWork() {
+    for (ReduceTask *task: reduce_task_tracker) {
+        if (task->status != COMPLETED) {
+            return true;
+        }
+    }
+
+    return false;
 }
