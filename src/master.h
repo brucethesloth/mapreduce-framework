@@ -90,6 +90,8 @@ private:
     /* NOW you can add below, data members and member functions as per the need of your implementation*/
     int M; // number of map jobs
     int R; // number of reduce jobs
+    MapReduceSpec mr_spec;
+    std::vector <FileShard> file_shards;
 
     // map task management
     std::vector<MapTask *> map_task_tracker;
@@ -112,10 +114,10 @@ private:
         std::unique_ptr <ClientAsyncResponseReader<MapReply>> response_reader;
     };
 
-    void WorkerSetup(const MapReduceSpec &);
+    void WorkerSetup();
 
     // Map Stuff
-    void PrepareMapPhase(const MapReduceSpec &, const std::vector <FileShard> &);
+    void PrepareMapPhase();
     void MapPhase();
     void CallMap(MapTask *task, WorkerInfo *worker_info);
     void AsyncCompleteMap();
@@ -127,10 +129,11 @@ private:
 /* CS6210_TASK: This is all the information your master will get from the framework.
 	You can populate your other class data members here if you want */
 Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file_shards) {
+    this->mr_spec = mr_spec;
+    this->file_shards = std::move(file_shards);
 
-    WorkerSetup(mr_spec);
-    PrepareMapPhase(mr_spec, file_shards);
-
+    WorkerSetup();
+    PrepareMapPhase();
 }
 
 /* CS6210_TASK: Here you go. once this function is called you will complete whole map reduce task and return true if succeeded */
@@ -140,7 +143,7 @@ bool Master::run() {
     return true;
 }
 
-void Master::WorkerSetup(const MapReduceSpec &mr_spec) {
+void Master::WorkerSetup() {
     // initialize worker resources
     for (std::string worker_addr : mr_spec.worker_addrs) {
         std::shared_ptr <Channel> channel =
@@ -163,7 +166,7 @@ void Master::WorkerSetup(const MapReduceSpec &mr_spec) {
     }
 }
 
-void Master::PrepareMapPhase(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file_shards) {
+void Master::PrepareMapPhase() {
     M = file_shards.size();
 
     // create map tasks
