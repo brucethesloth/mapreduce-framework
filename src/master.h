@@ -88,8 +88,8 @@ public:
 
 private:
     /* NOW you can add below, data members and member functions as per the need of your implementation*/
-    int M; // number of mapper
-    int R; // number of reducers
+    int M; // number of map jobs
+    int R; // number of reduce jobs
 
     // map task management
     std::vector<MapTask *> map_task_tracker;
@@ -112,41 +112,35 @@ private:
         std::unique_ptr <ClientAsyncResponseReader<MapReply>> response_reader;
     };
 
+    void WorkerSetup(const MapReduceSpec &);
+
+    // Map Stuff
+    void PrepareMapPhase(const MapReduceSpec &, const std::vector <FileShard> &);
     void MapPhase();
-
     void CallMap(MapTask *task, WorkerInfo *worker_info);
-
     void AsyncCompleteMap();
-
     bool shouldDoMapWork();
+
+    // Reduce Stuff
 };
 
 /* CS6210_TASK: This is all the information your master will get from the framework.
 	You can populate your other class data members here if you want */
 Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file_shards) {
-    M = file_shards.size();
 
-    // create map tasks
-    for (FileShard file_shard : file_shards) {
+    WorkerSetup(mr_spec);
+    PrepareMapPhase(mr_spec, file_shards);
 
-        ShardInfo shard = to_protobuf_shard(&file_shard);
-        MapRequest *request = new MapRequest;
-        request->set_user_id(mr_spec.user_id);
-        request->set_num_outputs(mr_spec.num_outputs);
-        request->set_output_dir(mr_spec.output_dir);
-        request->set_allocated_shard(&shard);
+}
 
-        MapTask *task = new MapTask;
-        task->shard_id = file_shard.sid;
-        task->request = *request;
-        task->status = PENDING;
+/* CS6210_TASK: Here you go. once this function is called you will complete whole map reduce task and return true if succeeded */
+bool Master::run() {
+    MapPhase();
 
-        map_task_tracker.emplace_back(task);
-    }
+    return true;
+}
 
-    print_map_tracker(map_task_tracker);
-
-
+void Master::WorkerSetup(const MapReduceSpec &mr_spec) {
     // initialize worker resources
     for (std::string worker_addr : mr_spec.worker_addrs) {
         std::shared_ptr <Channel> channel =
@@ -169,11 +163,28 @@ Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file
     }
 }
 
-/* CS6210_TASK: Here you go. once this function is called you will complete whole map reduce task and return true if succeeded */
-bool Master::run() {
-    MapPhase();
+void Master::PrepareMapPhase(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file_shards) {
+    M = file_shards.size();
 
-    return true;
+    // create map tasks
+    for (FileShard file_shard : file_shards) {
+
+        ShardInfo shard = to_protobuf_shard(&file_shard);
+        MapRequest *request = new MapRequest;
+        request->set_user_id(mr_spec.user_id);
+        request->set_num_outputs(mr_spec.num_outputs);
+        request->set_output_dir(mr_spec.output_dir);
+        request->set_allocated_shard(&shard);
+
+        MapTask *task = new MapTask;
+        task->shard_id = file_shard.sid;
+        task->request = *request;
+        task->status = PENDING;
+
+        map_task_tracker.emplace_back(task);
+    }
+
+    print_map_tracker(map_task_tracker);
 }
 
 void Master::MapPhase() {

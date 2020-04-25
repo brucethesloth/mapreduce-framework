@@ -51,33 +51,33 @@ Worker::Worker(std::string worker_addr) {
 }
 
 Status Worker::DoMap(ServerContext *context, const MapRequest *request, MapReply *reply) {
-    // todo: implement me!
-//    std::cout << "worker.run(), I 'm not ready yet" <<std::endl;
     auto mapper = get_mapper_from_task_factory(request->user_id());
     ShardInfo shard = request->shard();
 
+    std::cout << "Preparing to handle shard [" << shard.shard_id() << "] Num Outputs: " << request->num_outputs() << std::endl;
+    mapper->impl_ = new BaseMapperInternal();
+    mapper->impl_->initialize( request->output_dir(), shard.shard_id(), request->num_outputs() );
+    std::cout << "Internal Mapper Initialized" << std::endl;
+
     // debug
-//    std::cout << "Worker got fileshard info!\n";
-//    for (ShardSegment segment : shard.segments()) {
-//        std::string file_name = segment.file_name();
-//        int begin = segment.begin();
-//        int end = segment.end();
-//
-//        // debug
-//        std::cout << "filename: " << file_name << ", start: " << begin << ", end: " << end << std::endl;
-//
-//        std::ifstream input(file_name.c_str(), std::ios::binary);
-//        input.seekg(begin, std::ios::beg);
-//        std::string content;
-//
-//        while (input.tellg() < end && std::getline(input, content)) {
-//            mapper->map(content);
-//        }
-//    }
+    for (ShardSegment segment : shard.segments()) {
+        std::string file_name = segment.file_name();
+        int begin = segment.begin();
+        int end = segment.end();
+        std::ifstream input(file_name.c_str(), std::ios::binary);
+        input.seekg(begin, std::ios::beg);
+        std::string content;
+        while (input.tellg() < end && std::getline(input, content)) {
+            mapper->map(content);
+        }
+    }
+
+//    mapper->impl_->finalize();
 
     // reply
-    reply->set_worker_addr(worker_addr);
-    reply->set_filename("worker_" + worker_addr);
+    for (std::string interim_file_name : mapper->impl_->get_output_files()) {
+        reply->add_file_names(interim_file_name);
+    }
 
     // write to file
     std::cout << "work for Shard [" << request->shard().shard_id() << "] is completed by worker [" << worker_addr << "]" << std::endl;

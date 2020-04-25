@@ -29,8 +29,7 @@ message MapRequest {
 }
 
 message MapReply {
-    string worker_addr = 1;
-    string filename = 2;
+    repeated string file_names = 1;
 }
 
 message ReduceReply {
