@@ -25,7 +25,6 @@ struct FileSegment {
 /* CS6210_TASK: Create your own data structure here, where you can hold information about file splits,
      that your master would use for its own bookkeeping and to convey the tasks to the workers for mapping */
 struct FileShard {
-//    std::unordered_map <std::string, std::pair<std::streampos, std::streampos>> segments;
     int sid;
     std::vector<FileSegment *> segments;
 };
@@ -196,10 +195,6 @@ inline bool shard_files(const MapReduceSpec &mr_spec, std::vector <FileShard> &f
         file_shards.push_back(*current_file_shard);
         segments.clear();
     }
-//
-//    for ( FileShard shard : file_shards) {
-//        print_shard( &shard );
-//    }
 
     return true;
 }

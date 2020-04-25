@@ -60,7 +60,7 @@ Status Worker::DoMap(ServerContext *context, const MapRequest *request, MapReply
     mapper->impl_->initialize( request->output_dir(), shard.shard_id(), request->num_outputs() );
     std::cout << "Internal Mapper Initialized" << std::endl;
 
-    // debug
+    // map work
     for (ShardSegment segment : shard.segments()) {
         std::string file_name = segment.file_name();
         int begin = segment.begin();
@@ -73,12 +73,11 @@ Status Worker::DoMap(ServerContext *context, const MapRequest *request, MapReply
         }
     }
 
-    // reply
+    // reply to master
     for (std::string interim_file_name : mapper->impl_->get_output_files()) {
         reply->add_file_names(interim_file_name);
     }
 
-    // write to file
     std::cout << "work for shard [" << request->shard().shard_id() << "] is completed by worker [" << worker_addr << "]" << std::endl;
     return Status::OK;
 }
@@ -101,14 +100,12 @@ Status Worker::DoReduce(ServerContext *context, const ReduceRequest *request, Re
         }
     }
 
-    // apply user reduce
+    // reduce work
     for (auto entry = dictionary.begin(); entry != dictionary.end(); entry++) {
         reducer->reduce(entry->first, entry->second);
     }
 
-    std::cout << "Reduce applied by worker [" << worker_addr << "]" << std::endl;
-
-    // reply
+    // reply to master
     for (std::string final_file_name : reducer->impl_->get_output_files()) {
         reply->add_file_names( final_file_name );
     }
@@ -126,16 +123,10 @@ bool Worker::run() {
     grpc::EnableDefaultHealthCheckService(true);
     grpc::reflection::InitProtoReflectionServerBuilderPlugin();
     ServerBuilder builder;
-    // Listen on the given address without any authentication mechanism.
     builder.AddListeningPort(worker_addr, grpc::InsecureServerCredentials());
-    // Register "service" as the instance through which we'll communicate with
-    // clients. In this case it corresponds to an *synchronous* service.
     builder.RegisterService(this);
-    // Finally assemble the server.
     std::unique_ptr<Server> server(builder.BuildAndStart());
     std::cout << "Server listening on " << worker_addr << std::endl;
 
-    // Wait for the server to shutdown. Note that some other thread must be
-    // responsible for shutting down the server for this call to ever return.
     server->Wait();
 }
