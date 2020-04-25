@@ -52,36 +52,35 @@ Worker::Worker(std::string worker_addr) {
 
 Status Worker::DoMap(ServerContext *context, const MapRequest *request, MapReply *reply) {
     // todo: implement me!
-    std::cout << "worker.run(), I 'm not ready yet" <<std::endl;
+//    std::cout << "worker.run(), I 'm not ready yet" <<std::endl;
     auto mapper = get_mapper_from_task_factory(request->user_id());
     ShardInfo shard = request->shard();
 
     // debug
-    std::cout << "Worker got fileshard info!\n";
-    for (ShardSegment segment : shard.segments()) {
-        std::string file_name = segment.file_name();
-        int begin = segment.begin();
-        int end = segment.end();
-
-        // debug
-        std::cout << "filename: " << file_name << ", start: " << begin << ", end: " << end << std::endl;
-
-        std::ifstream input(file_name.c_str(), std::ios::binary);
-        input.seekg(begin, std::ios::beg);
-        std::string content;
-
-        while (input.tellg() < end && std::getline(input, content)) {
-            mapper->map(content);
-        }
-    }
-
-    // write to file
-    std::cout << "Implement me daddy!" << std::endl;
+//    std::cout << "Worker got fileshard info!\n";
+//    for (ShardSegment segment : shard.segments()) {
+//        std::string file_name = segment.file_name();
+//        int begin = segment.begin();
+//        int end = segment.end();
+//
+//        // debug
+//        std::cout << "filename: " << file_name << ", start: " << begin << ", end: " << end << std::endl;
+//
+//        std::ifstream input(file_name.c_str(), std::ios::binary);
+//        input.seekg(begin, std::ios::beg);
+//        std::string content;
+//
+//        while (input.tellg() < end && std::getline(input, content)) {
+//            mapper->map(content);
+//        }
+//    }
 
     // reply
     reply->set_worker_addr(worker_addr);
     reply->set_filename("worker_" + worker_addr);
 
+    // write to file
+    std::cout << "work for Shard [" << request->shard().shard_id() << "] is completed by worker [" << worker_addr << "]" << std::endl;
     return Status::OK;
 }
 

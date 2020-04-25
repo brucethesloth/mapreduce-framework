@@ -17,7 +17,7 @@ message ShardSegment {
 
 // master sends shard info to workers
 message ShardInfo {
-    int32 id = 1;
+    int32 shard_id = 1;
     repeated ShardSegment segments = 2;
 }
 

@@ -15,7 +15,6 @@
 #include "mapreduce_spec.h"
 #include "file_shard.h"
 
-
 // GRPC Stuff
 using grpc::Channel;
 using grpc::CompletionQueue;
@@ -28,7 +27,7 @@ using masterworker::WorkerService;
 using masterworker::MapRequest;
 using masterworker::MapReply;
 
-const int TIMEOUT_MAX = 32;
+const int TIMEOUT_MAX = 64;
 const int INITIAL_TIME_OUT = 1;
 const int BACK_OFF_FACTOR = 2;
 
@@ -53,6 +52,7 @@ struct WorkerInfo {
 
 inline ShardInfo to_protobuf_shard(FileShard *shard) {
     ShardInfo protobuf_shard;
+    protobuf_shard.set_shard_id(shard->sid);
 
     for (FileSegment *segment : shard->segments) {
 
@@ -63,6 +63,15 @@ inline ShardInfo to_protobuf_shard(FileShard *shard) {
     }
 
     return protobuf_shard;
+}
+
+inline void print_map_tracker(std::vector<MapTask *> tasks) {
+    for (MapTask *task : tasks) {
+        std::string status = task->status == PENDING ? "P" : task->status == RUNNING ? "R" : "C";
+        std::cout << "Task:"
+                  << " shard: " << task->shard_id
+                  << " status: " << status << std::endl;
+    }
 }
 
 
@@ -105,7 +114,8 @@ private:
 
     void MapPhase();
 
-    void CallMap(WorkerInfo *worker_info, MapTask *task);
+    void CallMap(MapTask *task, WorkerInfo *worker_info);
+
     void AsyncCompleteMap();
 
     bool shouldDoMapWork();
@@ -127,12 +137,15 @@ Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file
         request->set_allocated_shard(&shard);
 
         MapTask *task = new MapTask;
-        task->shard_id = shard.id();
+        task->shard_id = file_shard.sid;
         task->request = *request;
         task->status = PENDING;
 
-        map_task_tracker.push_back(task);
+        map_task_tracker.emplace_back(task);
     }
+
+    print_map_tracker(map_task_tracker);
+
 
     // initialize worker resources
     for (std::string worker_addr : mr_spec.worker_addrs) {
@@ -140,7 +153,7 @@ Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file
                 grpc::CreateChannel(worker_addr, grpc::InsecureChannelCredentials());
         std::unique_ptr <WorkerService::Stub> stub(WorkerService::NewStub(channel));
 
-        std::cout << "Initiating worker resource for [" << worker_addr << "]" << std::endl;
+//        std::cout << "Initiating worker resource for [" << worker_addr << "]" << std::endl;
         worker_stubs.insert(std::pair < std::string,
                             std::unique_ptr < WorkerService::Stub > > (worker_addr, std::move(stub)));
 
@@ -150,9 +163,9 @@ Master::Master(const MapReduceSpec &mr_spec, const std::vector <FileShard> &file
         worker_info->addr = worker_addr;
         worker_info->status = AVAILABLE;
 
-        worker_tracker.push_back(worker_info);
+        worker_tracker.emplace_back(worker_info);
 
-        std::cout << "Worker Resource initiated for [" << worker_addr << "]" << std::endl;
+//        std::cout << "Worker Resource initiated for [" << worker_addr << "]" << std::endl;
     }
 }
 
@@ -164,7 +177,7 @@ bool Master::run() {
 }
 
 void Master::MapPhase() {
-    std::cout << "Map Phase Started! " << std::endl;
+    std::cout << "Map Phase Started!" << std::endl;
 
     // 1. Spawn a listener routine to reap the results of the future map calls
     std::thread map_listener(&Master::AsyncCompleteMap, this);
@@ -172,45 +185,43 @@ void Master::MapPhase() {
     // 2. Do Map work
     while (shouldDoMapWork()) {
 
+        MapTask *task = nullptr;
+
         //2.1 Pick a Task
-        int t = -1;
-        for (int i = 0; i < map_task_tracker.size(); i++) {
-            if (map_task_tracker.at(i)->status == PENDING) {
-                map_task_tracker.at(i)->status = RUNNING;
-                t = i;
+        for (MapTask *it: map_task_tracker) {
+            if (it->status == PENDING) {
+                task = it;
                 break;
             }
         }
 
-        if (t != -1) {
+        if (task != nullptr) {
             // 2.2 Pick a worker
-            std::cout << "t: " << t << std::endl;
-            std::cout << "Work needs to be done for shard [" << map_task_tracker.at(t)->shard_id << "]." << std::endl;
+            std::cout << "Work needs to be done for shard [" << task->shard_id << "]." << std::endl;
 
-            int w = -1;
+            WorkerInfo *worker = nullptr;
 
-            for (int j = 0; j < worker_tracker.size(); j++) {
-                if (worker_tracker.at(j)->status == AVAILABLE) {
-                    worker_tracker.at(j)->status = BUSY;
-                    w = j;
+            for (WorkerInfo *it: worker_tracker) {
+                if (it->status == AVAILABLE) {
+                    worker = it;
                     break;
                 }
             }
 
-            if (w != -1) {
-                std::cout << "Got Worker from [" << worker_tracker.at(w)->addr << "]" << std::endl;
+            if (worker != nullptr) {
+//                std::cout << "Got Worker from [" << worker->addr << "]" << std::endl;
+                task->status = RUNNING;
+                worker->status = BUSY;
 
                 // 2.3 Call Map
-                std::thread async_callMap(&Master::CallMap, this, worker_tracker.at(w), map_task_tracker.at(t));
+                std::thread async_callMap(&Master::CallMap, this, task, worker);
                 async_callMap.detach();
 
-                std::cout << "Dispatched job for shard [" << map_task_tracker.at(t)->shard_id
-                          << "] to worker [" << worker_tracker.at(w)->addr << "]" << std::endl;
+                std::cout << "Dispatched job for shard [" << task->shard_id
+                          << "] to worker [" << worker->addr << "]" << std::endl;
+            } else {
+                std::cout << "No worker is available at the moment for shard [" << task->shard_id << "]" << std::endl;
             }
-
-            std::cout << "No worker is available at the moment for shard [" << t << "]" << std::endl;
-        } else {
-            std::cout << "All tasks are either running or finished" << std::endl;
         }
     }
 
@@ -220,10 +231,10 @@ void Master::MapPhase() {
 }
 
 
-void Master::CallMap(WorkerInfo *worker_info, MapTask *task) {
-    std::cout << "Shard [" << task->shard_id
-              << "] is being handled by Worker [" << worker_info->addr
-              << "]." << std::endl;
+void Master::CallMap(MapTask *task, WorkerInfo *worker_info) {
+//    std::cout << "Shard [" << task->shard_id
+//              << "] is being handled by Worker [" << worker_info->addr
+//              << "]." << std::endl;
 
     // fill in call data: timeout, worker_addr, protobuf_shard are extra stuff
     AsyncMapCall *map_call = new AsyncMapCall;
@@ -252,20 +263,19 @@ void Master::AsyncCompleteMap() {
 
     while (shouldDoMapWork()) {
         cq.Next(&got_tag, &ok);
-
         AsyncMapCall *call = static_cast<AsyncMapCall *>(got_tag);
 
         GPR_ASSERT(ok);
 
         // updating task status
-        std::cout << "Updating Status for shard [" << call->request.shard().id() << "]" << std::endl;
+//        std::cout << "Updating Status for shard [" << call->request.shard().shard_id() << "]" << std::endl;
         for (MapTask *t : map_task_tracker) {
-            if (t->shard_id == call->request.shard().id()) {
+            if (t->shard_id == call->request.shard().shard_id()) {
                 if (!call->status.ok()) {
-                    std::cout << "Shard [" << call->request.shard().id() << "] failed!" << std::endl;
+                    std::cout << "shard [" << call->request.shard().shard_id() << "] failed!" << std::endl;
                     t->status = PENDING;
                 } else {
-                    std::cout << "Shard [" << call->request.shard().id() << "] completed!" << std::endl;
+                    std::cout << "shard [" << call->request.shard().shard_id() << "] completed!" << std::endl;
                     t->status = COMPLETED;
                 }
 
@@ -275,9 +285,9 @@ void Master::AsyncCompleteMap() {
 
         // updating worker status
         int new_timeout;
-        std::cout << "Releasing Worker [" << call->worker_addr << "] Back!" << std::endl;
+//        std::cout << "Releasing Worker [" << call->worker_addr << "] Back!" << std::endl;
         for (WorkerInfo *worker_info : worker_tracker) {
-            if (std::strcmp( worker_info->addr.c_str(), call->worker_addr.c_str() ) == 0) {
+            if (std::strcmp(worker_info->addr.c_str(), call->worker_addr.c_str()) == 0) {
 
                 if (!call->status.ok()) {
                     new_timeout = call->timeout < TIMEOUT_MAX ? BACK_OFF_FACTOR * call->timeout : call->timeout;
@@ -290,7 +300,7 @@ void Master::AsyncCompleteMap() {
                 break;
             }
         }
-        std::cout << "Worker [" << call->worker_addr << "] released!" << std::endl;
+        std::cout << "worker [" << call->worker_addr << "] released!" << std::endl;
 
         delete call;
     }
@@ -304,6 +314,5 @@ bool Master::shouldDoMapWork() {
         }
     }
 
-    std::cout << "Work Done !" << std::endl;
     return false;
 }
